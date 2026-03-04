@@ -597,41 +597,34 @@ export const useVoiceChatController = () => {
     await startVoiceSession()
   }, [isSessionActive, startVoiceSession, stopVoiceSession])
 
-  useEffect(() => {
-    if (!waitingAssistantRef.current || status !== 'ready') return
-    if (!assistantMessage?.id || !assistantMessage.text.trim()) return
-    if (assistantMessage.id === lastSpokenAssistantIdRef.current) return
+  const handleAssistantSpeech = useCallback(
+    async (message: { id: string; text: string }) => {
+      setRevealedAssistantMessageId(message.id)
+      setRevealedAssistantText('')
+      waitingAssistantRef.current = false
+      setIsAwaitingAssistant(false)
+      lastSpokenAssistantIdRef.current = message.id
+      setLastSpokenAssistantId(message.id)
 
-    setRevealedAssistantMessageId(assistantMessage.id)
-    setRevealedAssistantText('')
-    waitingAssistantRef.current = false
-    setIsAwaitingAssistant(false)
-    lastSpokenAssistantIdRef.current = assistantMessage.id
-    setLastSpokenAssistantId(assistantMessage.id)
-
-    const speakAndResume = async () => {
       setVoiceState('speaking')
       setVoiceError(null)
 
       try {
-        const audioBlob = await synthesizeAudio(assistantMessage.text)
+        const audioBlob = await synthesizeAudio(message.text)
         await playAudio(audioBlob, {
           onProgress: progress => {
-            const nextLength = Math.min(
-              assistantMessage.text.length,
-              Math.floor(assistantMessage.text.length * progress)
-            )
+            const nextLength = Math.min(message.text.length, Math.floor(message.text.length * progress))
 
-            setRevealedAssistantText(assistantMessage.text.slice(0, nextLength))
+            setRevealedAssistantText(message.text.slice(0, nextLength))
           },
           onComplete: () => {
-            setRevealedAssistantText(assistantMessage.text)
+            setRevealedAssistantText(message.text)
           },
         })
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Falha ao sintetizar voz.'
-        setVoiceError(message)
-        setRevealedAssistantText(assistantMessage.text)
+        const errorMessage = error instanceof Error ? error.message : 'Falha ao sintetizar voz.'
+        setVoiceError(errorMessage)
+        setRevealedAssistantText(message.text)
       } finally {
         setRevealedAssistantMessageId(null)
 
@@ -642,10 +635,30 @@ export const useVoiceChatController = () => {
           setVoiceState('')
         }
       }
+    },
+    [playAudio, synthesizeAudio]
+  )
+
+  useEffect(() => {
+    if (!waitingAssistantRef.current) return
+    if (!assistantMessage?.id || !assistantMessage.text.trim()) return
+    if (assistantMessage.id === lastSpokenAssistantIdRef.current) return
+
+    if (status === 'ready') {
+      void handleAssistantSpeech(assistantMessage)
+      return
     }
 
-    void speakAndResume()
-  }, [assistantMessage, playAudio, status, synthesizeAudio])
+    const fallbackTimer = window.setTimeout(() => {
+      if (!waitingAssistantRef.current) return
+      if (assistantMessage.id === lastSpokenAssistantIdRef.current) return
+      void handleAssistantSpeech(assistantMessage)
+    }, 2200)
+
+    return () => {
+      window.clearTimeout(fallbackTimer)
+    }
+  }, [assistantMessage, handleAssistantSpeech, status])
 
   useEffect(() => {
     return () => {
