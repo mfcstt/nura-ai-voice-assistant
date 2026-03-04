@@ -21,6 +21,7 @@ import { createThreadId, getMessageText } from './utils'
 
 export const useVoiceChatController = () => {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const recordingMimeTypeRef = useRef<string>('audio/webm')
   const mediaStreamRef = useRef<MediaStream | null>(null)
   const audioChunksRef = useRef<Blob[]>([])
   const audioContextRef = useRef<AudioContext | null>(null)
@@ -229,11 +230,11 @@ export const useVoiceChatController = () => {
     void loadHistory()
   }, [setMessages, threadId])
 
-  const transcribeAudio = useCallback(async (audioBlob: Blob) => {
+  const transcribeAudio = useCallback(async (audioBlob: Blob, fileName: string) => {
     setVoiceError(null)
 
     const formData = new FormData()
-    formData.append('audio', audioBlob, 'recording.webm')
+    formData.append('audio', audioBlob, fileName)
 
     const res = await fetch('/api/voice/transcribe', {
       method: 'POST',
@@ -385,12 +386,36 @@ export const useVoiceChatController = () => {
     }
 
     try {
+      if (typeof MediaRecorder === 'undefined') {
+        setVoiceError('Seu navegador não suporta gravação de áudio nesta página.')
+        setVoiceState('')
+        setIsSessionActive(false)
+        activeSessionRef.current = false
+        return
+      }
+
       setVoiceError(null)
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       mediaStreamRef.current = stream
       audioChunksRef.current = []
 
-      const recorder = new MediaRecorder(stream)
+      const preferredMimeTypes = [
+        'audio/webm;codecs=opus',
+        'audio/webm',
+        'audio/mp4;codecs=mp4a.40.2',
+        'audio/mp4',
+        'audio/mpeg',
+      ]
+
+      const supportedMimeType = preferredMimeTypes.find(mimeType =>
+        MediaRecorder.isTypeSupported(mimeType)
+      )
+
+      const recorder = supportedMimeType
+        ? new MediaRecorder(stream, { mimeType: supportedMimeType })
+        : new MediaRecorder(stream)
+
+      recordingMimeTypeRef.current = recorder.mimeType || supportedMimeType || 'audio/webm'
       mediaRecorderRef.current = recorder
       const recordingStartedAt = Date.now()
       let heardVoice = false
@@ -440,14 +465,29 @@ export const useVoiceChatController = () => {
           return
         }
 
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' })
+        const recordedMimeType =
+          audioChunksRef.current[0]?.type || recordingMimeTypeRef.current || 'audio/webm'
+
+        const extensionByMimeType: Record<string, string> = {
+          'audio/webm': 'webm',
+          'audio/webm;codecs=opus': 'webm',
+          'audio/mp4': 'm4a',
+          'audio/mp4;codecs=mp4a.40.2': 'm4a',
+          'audio/mpeg': 'mp3',
+        }
+
+        const uploadExtension =
+          extensionByMimeType[recordedMimeType] ??
+          (recordedMimeType.includes('mp4') ? 'm4a' : recordedMimeType.includes('mpeg') ? 'mp3' : 'webm')
+
+        const audioBlob = new Blob(audioChunksRef.current, { type: recordedMimeType })
         if (!audioBlob.size || !activeSessionRef.current) return
 
         processingTurnRef.current = true
         setVoiceState('processing')
 
         try {
-          const transcript = await transcribeAudio(audioBlob)
+          const transcript = await transcribeAudio(audioBlob, `recording.${uploadExtension}`)
 
           if (transcript.trim()) {
             consecutiveSilentTurnsRef.current = 0
