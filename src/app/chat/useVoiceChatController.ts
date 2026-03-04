@@ -276,6 +276,7 @@ export const useVoiceChatController = () => {
       options?: {
         onProgress?: (progress: number) => void
         onComplete?: () => void
+        fallbackText?: string
       }
     ) => {
       const sourceUrl = URL.createObjectURL(audioBlob)
@@ -367,6 +368,42 @@ export const useVoiceChatController = () => {
         }
 
         audio.play().catch(error => {
+          const fallbackText = options?.fallbackText?.trim()
+
+          if (
+            fallbackText &&
+            typeof window !== 'undefined' &&
+            'speechSynthesis' in window &&
+            typeof SpeechSynthesisUtterance !== 'undefined'
+          ) {
+            try {
+              window.speechSynthesis.cancel()
+              const utterance = new SpeechSynthesisUtterance(fallbackText)
+              utterance.lang = 'pt-BR'
+              utterance.rate = 1
+              utterance.pitch = 1
+
+              utterance.onend = () => {
+                options?.onProgress?.(1)
+                options?.onComplete?.()
+                cleanup()
+                resolve()
+              }
+
+              utterance.onerror = () => {
+                cleanup()
+                reject(error)
+              }
+
+              window.speechSynthesis.speak(utterance)
+              return
+            } catch {
+              cleanup()
+              reject(error)
+              return
+            }
+          }
+
           cleanup()
           reject(error)
         })
@@ -620,6 +657,7 @@ export const useVoiceChatController = () => {
           onComplete: () => {
             setRevealedAssistantText(message.text)
           },
+          fallbackText: message.text,
         })
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Falha ao sintetizar voz.'
